@@ -202,9 +202,9 @@ export default function SubmissionPage() {
                   name="gameName"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>আপনার গেমের নাম</FormLabel>
+                      <FormLabel>আপনার গেম আইডির নাম</FormLabel>
                       <FormControl>
-                        <Input placeholder="আপনার গেমের নাম লিখুন" {...field} />
+                        <Input placeholder="আপনার গেম আইডির নাম লিখুন" {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
