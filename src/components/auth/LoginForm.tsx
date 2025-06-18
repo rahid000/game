@@ -283,7 +283,7 @@ const LoginForm: FC = () => {
         </div>
         <CardTitle className="text-3xl font-headline">Gamer's Launchpad</CardTitle>
         <CardDescription className="text-base">
-          আপনার ইমেইল অথবা ফেসবুক নম্বর এবং একটি পাসওয়ার্ড দিয়ে লগইন করুন অথবা নতুন অ্যাকাউন্ট তৈরি করুন। <br/> (সতর্কতা: এটি আপনার আসল ফেসবুক পাসওয়ার্ড নয়।)
+          আপনার ইমেইল অথবা ফেসবুক নম্বর এবং একটি পাসওয়ার্ড দিয়ে লগইন করুন।
         </CardDescription>
       </CardHeader>
       <CardContent>
