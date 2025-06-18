@@ -254,7 +254,7 @@ export default function SubmissionPage() {
             </Form>
           </CardContent>
           <CardFooter className="flex flex-col items-center gap-4 p-6 pt-4 text-xs text-muted-foreground">
-            <p className="text-center">আপনার সকল তথ্য আমাদের কাছে সুরক্ষিত থাকবে এবং যাচাইয়ের পর ২০ ডায়মন্ড পুরষ্কার পাঠানো হবে।</p>
+            <p className="text-center">আপনার সকল তথ্য আমাদের কাছে সুরক্ষিত থাকবে এবং যাচাইয়ের পর ৫০ থেকে ১০০০ ডায়মন্ড পুরষ্কার পাঠানো হবে।</p>
             <Button variant="outline" className="w-full max-w-xs" asChild>
               <Link href="/">হোমে ফিরে যান</Link>
             </Button>
