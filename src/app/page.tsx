@@ -93,7 +93,7 @@ export default function HomePage() {
         )}
       </main>
       <footer className="py-4 text-center text-sm text-muted-foreground">
-        লগুর উপর টিপি দেন
+        লগুর উপর চাপ দেন
       </footer>
     </div>
   );

